@@ -1,9 +1,9 @@
 using GZip
 using ProgressMeter
 
-#Base.start(::GZip.GZipStream) = 0
-#Base.next(s::GZip.GZipStream, st::Int) = GZip.read(s, UInt8), st+1 # position(s, true)
-#Base.done(s::GZip.GZipStream, st::Int) = eof(s)
+Base.start(::GZip.GZipStream) = 0
+Base.next(s::GZip.GZipStream, st::Int) = GZip.read(s, UInt8), st+1 # position(s, true)
+Base.done(s::GZip.GZipStream, st::Int) = eof(s)
 #Base.length(s::GZip.GZipStream) = filesize(s.name)
 
 @doc """
@@ -30,7 +30,6 @@ Output:
 Also display progress meter
 """ ->
 function readvcf(filename)
-    tstart = time()
     csize = filesize(filename)
 
     #gc_enable(false)
@@ -41,16 +40,22 @@ function readvcf(filename)
     end
 
     info("Reading $filename:")
-    p = Progress(csize, 2, "", 50) #Progress bar updates ~6s
+    p = Progress(csize, 2, "", 50) #Progress bar
 
     idxs = Int[]
-    data = Vector{Int}[]
-    linedata = Int[]
+    #data = Vector{Int}[]
+    #linedata = Int[]
     nnzcols = Int[]
+    sizehint!(idxs, 5000)
+    sizehint!(nnzcols, 5000)
     mode = :startline
-    lineno = pos = posstart = fieldidx = nnzcol = 0
+    lineno = pos = posstart = fieldidx = nnzcol = skiplines = 0
     tmpbuf = IOBuffer(19)
-    for (n, c) in enumerate(stream)
+    n = 0
+    while true
+    #for c in stream
+        c = read(stream, UInt8)
+        n += 1
         if mode == :startline
             lineno += 1
             fieldidx = 1
@@ -58,6 +63,7 @@ function readvcf(filename)
 
         elseif mode == :skipline
             if c == '\n'
+                skiplines += 1
                 mode = :startline
             end
 
@@ -86,27 +92,28 @@ function readvcf(filename)
                 fieldidx += 1
                 if fieldidx == 10
                     mode = :readdata
-                    push!(data, Int[])
-                    linedata = data[end]
+                    #push!(data, Int[])
+                    #linedata = data[end]
                     nnzcol = 0
-                    if length(data) > 1
-                        sizehint!(linedata, length(data[end-2]))
-                    end
+                    #if length(data) > 1
+                    #    sizehint!(linedata, length(data[end-2]))
+                    #end
                 end
             end
 
         elseif mode == :readdata
             if c == '0'
-                push!(linedata, 0)
+                #push!(linedata, 0)
+                continue
 
             elseif '0' <= c < '9'
-                push!(linedata, c-UInt8('0'))
+                #push!(linedata, c-UInt8('0'))
                 nnzcol += 1
 
             elseif c == '\n'
                 mode = :startline
                 push!(idxs, pos)
-                push!(data, linedata)
+                #push!(data, linedata)
                 push!(nnzcols, nnzcol)
 
                 if lineno%500==0 #Update progress bar every 500 lines
@@ -114,23 +121,42 @@ function readvcf(filename)
                     update!(p, coffset)
                 end
 
+                if (lineno-skiplines)==5000 #Estimate memory consumption
+                    coffset = position(stream, true)
+                    estimatedlines = ceil(Int, csize/coffset*(lineno-skiplines))
+                    println("Estimated number of lines:", estimatedlines)
+                    sizehint!(idxs, estimatedlines)
+                    sizehint!(nnzcols, estimatedlines)
+                end
+
+                #Debug: try only first 5000 lines
+                #if lineno==5000
+                #    @goto done
+                #end
+
             elseif !(c == '\t' || c == '|' || c == '\\' || c == '\r')
                 error("Unknown char $c ($(Uint(c))) on line $lineno, file offset $n`")
             end
         end
+
+        eof(stream) && break
     end
 
     @label done
 
+    println("Actual number of header lines:", skiplines)
+    println("Actual number of record lines:", lineno-skiplines)
+
     println("Row density in rows: ", length(idxs)/idxs[end])
-    println("Average column density: ", mean(nnzcols)/length(data[1]))
+    println("Average column nonzeros: ", mean(nnzcols))#/length(data[1]))
 
     try
         close(stream)
     end
 
     #gc_enable(true)
-    idxs, data, nnzcols
+    #idxs, data, nnzcols
+    idxs, nnzcols
 end
 
 function Base.parse(::Type{Int64}, s::AbstractArray{UInt8})
@@ -141,8 +167,10 @@ function Base.parse(::Type{Int64}, s::AbstractArray{UInt8})
     n
 end
 
-@time (idxs, data, nnzcols) = readvcf("ALL.chr1.phase3_shapeit2_mvncall_integrated_v5a.20130502.genotypes.vcf.gz")
+@time (idxs, nnzcols) = readvcf("ALL.chr1.phase3_shapeit2_mvncall_integrated_v5a.20130502.genotypes.vcf.gz")
 #@time (idxs, data, nnzcols) = readvcf("try.vcf")
 
 using JLD
-@time JLD.save("chr1.jld", "idxs", idxs, "data", data, "nnzcols", nnzcols, compress=true)
+#@time JLD.save("chr1.jld", "idxs", idxs, "data", data, "nnzcols", nnzcols, compress=true)
+@time JLD.save("chr1.jld", "idxs", idxs, "nnzcols", nnzcols, compress=true)
+
