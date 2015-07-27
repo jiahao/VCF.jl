@@ -2,6 +2,9 @@ using GZip
 using JLD
 using ProgressMeter
 
+#Eat the second argument for non-GZip IOstreams
+Base.position(b::Base.AbstractIOBuffer, ::Bool) = position(b)
+
 @doc "Initial guess for how many nonzero entries will be read in" ->
 const INITIAL_SIZE_GUESS = 1_000_000
 
@@ -58,7 +61,7 @@ function Base.read(filename)
     p = Progress(csize, 2, "", 50) #Progress bar
 
     mode = :startline
-    lineno = pos = posstart = rowid = fieldidx = skiplines = 0
+    lineno = pos = rowid = fieldidx = skiplines = 0
     thisentry = 0
     colid = 1
     tmpbuf = IOBuffer(19)
@@ -73,21 +76,19 @@ function Base.read(filename)
     stream = if endswith(filename, ".gz")
         GZip.open(filename)
     else
-        Mmap.mmap(filename)
-        #except e
-        #    if isa(e, ArgumentError) && e.msg == "requested size must be > 0, got 0"
-        #        warn("File $filename is empty")
-        #        @goto done
-        #    end
-        #end
+        IOBuffer(Mmap.mmap(filename))
     end
 
     #Iterate through file
     while true
         c = try
             read(stream, UInt8)
-        catch EOFError
-            break
+        catch e
+            if isa(e, EOFError)
+                break
+            else
+                rethrow(e)
+            end
         end
         n += 1
         if mode == :startline
@@ -135,7 +136,8 @@ function Base.read(filename)
                 continue
 
             elseif '0' ≤ c ≤ '9' || c == '.'
-                seek(tmpbuf, position(tmpbuf)+1)
+                #Horrible hack to force tmpbuf pointer forward without storing a value
+                tmpbuf.ptr += 1
                 #write(tmpbuf, c)
 
             elseif c == '\n'
@@ -149,6 +151,7 @@ function Base.read(filename)
                     seek(tmpbuf, 0)
                 end
                 colid += 1
+
                 mode = :savedata
 
             elseif (c == '|' || c == '\\') #Ploidy divider
@@ -157,7 +160,6 @@ function Base.read(filename)
                     thisentry += 1
                     seek(tmpbuf, 0)
                 end
-                mode = :savedata
 
             elseif c==':' #Extra genome-level data I don't understand
                 mode = :skipfield
@@ -182,10 +184,11 @@ function Base.read(filename)
                 update!(p, coffset)
             end
 
-            if position(tmpbuf) > 0
+            if thisentry != 0#position(tmpbuf) > 0
                 push!(Is, rowid)
                 push!(Js, colid)
                 push!(Vs, thisentry) #parse(Int8, takebuf_array(tmpbuf)))
+                thisentry = 0
 
                 if length(Vs) == INITIAL_SIZE_GUESS
                     #More data than initially guessed
