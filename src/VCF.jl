@@ -50,8 +50,8 @@ Reference:
     http://samtools.github.io/hts-specs/VCFv4.2.pdf
 """ ->
 function Base.read(filename)
-    Is = Int32[]
-    Js = Int32[]
+    Is = Int64[]
+    Js = Int64[]
     Vs = Int8[]
     sizehint!(Is, INITIAL_SIZE_GUESS)
     sizehint!(Js, INITIAL_SIZE_GUESS)
@@ -61,9 +61,9 @@ function Base.read(filename)
     p = Progress(csize, 2, "", 50) #Progress bar
 
     mode = :startline
-    lineno = pos = rowid = fieldidx = skiplines = 0
+    lineno = pos = fieldidx = skiplines = 0
     thisentry = 0
-    colid = 1
+    rowid = colid = 1
     tmpbuf = IOBuffer(19)
     n = 0
 
@@ -185,7 +185,7 @@ function Base.read(filename)
             end
 
             if thisentry != 0#position(tmpbuf) > 0
-                push!(Is, rowid)
+                push!(Is, pos)
                 push!(Js, colid)
                 push!(Vs, thisentry) #parse(Int8, takebuf_array(tmpbuf)))
                 thisentry = 0
@@ -218,9 +218,10 @@ function Base.read(filename)
     if length(Vs) > 0
         nrows = maximum(Is)
         ncols = maximum(Js)
-        println("Number of rows: ", nrows)
-        println("Number of cols: ", ncols)
-        println("Average density: ", length(Vs)/(nrows*ncols))
+        println("Number of record rows: ", rowid)
+        println("Number of logical rows: ", nrows)
+        println("Number of logical cols: ", ncols)
+        println("Average density: ", length(Vs)/(Int64(nrows)*Int64(ncols)))
     end
 
     try
@@ -246,14 +247,7 @@ filelist = length(ARGS) > 0 ? ARGS : filter(f->(endswith(f, ".vcf") ||
     endswith(f, ".vcf.gz")), readdir())
 
 for filename in filelist
-    destfilename = if count(x->x=='.', filename) > 2
-        #The 1000 genomes project files have names like
-        #ALL.chr9.phase3_shapeit2_mvncall_integrated_v5a.20130502.genotypes.vcf.gz
-        #map to chr9.jld
-        string(split(filename, ".")[2], ".jld")
-    else #Safe choice
-        string(filename, ".jld")
-    end
+    destfilename = string(filename[1:end-(endswith("vcf.gz") ? 6 : 3)], "jld")
 
     #Don't process file if it already exists
     if isfile(destfilename)
