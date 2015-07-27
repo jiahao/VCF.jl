@@ -2,6 +2,15 @@ using GZip
 using JLD
 using ProgressMeter
 
+@doc "Initial guess for how many nonzero entries will be read in" ->
+const INITIAL_SIZE_GUESS = 1_000_000
+
+@doc "Fudge factor used to reallocate storage vectors" ->
+const SLACK_FACTOR = 1.25
+
+@doc "Update progress bar each time this many lines are read" ->
+const UPDATE_LINE_INTERVAL = 500
+
 @doc """
 Read VCF files
 
@@ -39,9 +48,9 @@ function read(filename)
     Is = Int[]
     Js = Int[]
     Vs = Int8[]
-    sizehint!(Is, 500000)
-    sizehint!(Js, 500000)
-    sizehint!(Vs, 500000)
+    sizehint!(Is, INITIAL_SIZE_GUESS)
+    sizehint!(Js, INITIAL_SIZE_GUESS)
+    sizehint!(Vs, INITIAL_SIZE_GUESS)
 
     mode = :startline
     lineno = pos = posstart = rowid = fieldidx = nnzcol = skiplines = 0
@@ -116,7 +125,7 @@ function read(filename)
             end
         end
         if mode == :savedata
-            if lineno%500==0 #Update progress bar every 500 lines
+            if lineno % UPDATE_LINE_INTERVAL == 0 #Update progress bar
                 coffset = position(stream, true)
                 update!(p, coffset)
             end
@@ -126,12 +135,14 @@ function read(filename)
                 push!(Js, colid)
                 push!(Vs, parse(Int8, takebuf_array(tmpbuf)))
 
-                if length(Vs) == 500000 #Estimate memory consumption
+                if length(Vs) == INITIAL_SIZE_GUESS
+                    #More data than initially guessed
+                    #Estimate memory consumption and resize in-memory storage
                     coffset = position(stream, true)
                     estnnz = ceil(Int, length(Vs)*csize/coffset)
                     info("Number of nonzero entries read so far:", length(Vs))
                     info("Estimated number of nonzero entries:", estnnz)
-                    estnnz = ceil(Int, 1.1*estnnz)
+                    estnnz = ceil(Int, SLACK_FACTOR*estnnz)
                     sizehint!(Is, estnnz)
                     sizehint!(Js, estnnz)
                     sizehint!(Vs, estnnz)
