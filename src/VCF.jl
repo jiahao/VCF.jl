@@ -1,10 +1,6 @@
 using GZip
+using JLD
 using ProgressMeter
-
-Base.start(::GZip.GZipStream) = 0
-Base.next(s::GZip.GZipStream, st::Int) = GZip.read(s, UInt8), st+1 # position(s, true)
-Base.done(s::GZip.GZipStream, st::Int) = eof(s)
-#Base.length(s::GZip.GZipStream) = filesize(s.name)
 
 @doc """
 Read VCF files
@@ -29,32 +25,35 @@ Output:
 
 Also display progress meter
 """ ->
-function readvcf(filename)
+function read(filename)
     csize = filesize(filename)
 
-    #gc_enable(false)
     stream = if endswith(filename, ".gz")
         GZip.open(filename)
     else
         Mmap.mmap(filename)
     end
 
-    info("Reading $filename:")
     p = Progress(csize, 2, "", 50) #Progress bar
 
-    idxs = Int[]
-    #data = Vector{Int}[]
-    #linedata = Int[]
-    nnzcols = Int[]
-    sizehint!(idxs, 5000)
-    sizehint!(nnzcols, 5000)
+    Is = Int[]
+    Js = Int[]
+    Vs = Int8[]
+    sizehint!(Is, 500000)
+    sizehint!(Js, 500000)
+    sizehint!(Vs, 500000)
+
     mode = :startline
-    lineno = pos = posstart = fieldidx = nnzcol = skiplines = 0
+    lineno = pos = posstart = rowid = fieldidx = nnzcol = skiplines = 0
+    colid = 1
     tmpbuf = IOBuffer(19)
     n = 0
     while true
-    #for c in stream
-        c = read(stream, UInt8)
+        c = try
+            read(stream, UInt8)
+        catch EOFError
+            break
+        end
         n += 1
         if mode == :startline
             lineno += 1
@@ -92,85 +91,99 @@ function readvcf(filename)
                 fieldidx += 1
                 if fieldidx == 10
                     mode = :readdata
-                    #push!(data, Int[])
-                    #linedata = data[end]
                     nnzcol = 0
-                    #if length(data) > 1
-                    #    sizehint!(linedata, length(data[end-2]))
-                    #end
+                    colid = 0
                 end
             end
 
         elseif mode == :readdata
-            if c == '0'
-                #push!(linedata, 0)
+            if c == '0' && position(tmpbuf)==0
                 continue
 
-            elseif '0' <= c < '9'
-                #push!(linedata, c-UInt8('0'))
-                nnzcol += 1
+            elseif '0' ≤ c ≤ '9'
+                write(tmpbuf, c)
 
             elseif c == '\n'
-                mode = :startline
-                push!(idxs, pos)
-                #push!(data, linedata)
-                push!(nnzcols, nnzcol)
+                rowid += 1
+                mode = :savedata
 
-                if lineno%500==0 #Update progress bar every 500 lines
-                    coffset = position(stream, true)
-                    update!(p, coffset)
-                end
-
-                if (lineno-skiplines)==5000 #Estimate memory consumption
-                    coffset = position(stream, true)
-                    estimatedlines = ceil(Int, csize/coffset*(lineno-skiplines))
-                    println("Estimated number of lines:", estimatedlines)
-                    sizehint!(idxs, estimatedlines)
-                    sizehint!(nnzcols, estimatedlines)
-                end
-
-                #Debug: try only first 5000 lines
-                #if lineno==5000
-                #    @goto done
-                #end
-
-            elseif !(c == '\t' || c == '|' || c == '\\' || c == '\r')
+            elseif (c == '\t' || c == '|' || c == '\\' || c == '\r')
+                #Reset IO buffer
+                colid += 1
+                mode = :savedata
+            else
                 error("Unknown char $c ($(Uint(c))) on line $lineno, file offset $n`")
             end
         end
+        if mode == :savedata
+            if lineno%500==0 #Update progress bar every 500 lines
+                coffset = position(stream, true)
+                update!(p, coffset)
+            end
 
-        eof(stream) && break
+            if position(tmpbuf) > 0
+                push!(Is, rowid)
+                push!(Js, colid)
+                push!(Vs, parse(Int8, takebuf_array(tmpbuf)))
+
+                if length(Vs) == 500000 #Estimate memory consumption
+                    coffset = position(stream, true)
+                    estnnz = ceil(Int, length(Vs)*csize/coffset)
+                    info("Number of nonzero entries read so far:", length(Vs))
+                    info("Estimated number of nonzero entries:", estnnz)
+                    estnnz = ceil(Int, 1.1*estnnz)
+                    sizehint!(Is, estnnz)
+                    sizehint!(Js, estnnz)
+                    sizehint!(Vs, estnnz)
+                end
+            end
+
+            mode = c=='\n' ? :startline : :readdata
+        end
     end
 
     @label done
 
+    finish!(p)
     println("Actual number of header lines:", skiplines)
     println("Actual number of record lines:", lineno-skiplines)
+    println("Actual number of nonzeros:", length(Vs))
 
-    println("Row density in rows: ", length(idxs)/idxs[end])
-    println("Average column nonzeros: ", mean(nnzcols))#/length(data[1]))
+    nrows = maximum(Is)
+    ncols = maximum(Js)
+    println("Number of rows: ", nrows)
+    println("Number of cols: ", ncols)
+    println("Average density: ", length(Vs)/(nrows*ncols))
 
     try
         close(stream)
     end
 
-    #gc_enable(true)
-    #idxs, data, nnzcols
-    idxs, nnzcols
+    Is, Js, Vs
 end
 
-function Base.parse(::Type{Int64}, s::AbstractArray{UInt8})
-    n = zero(Int64)
-    for c in s
-        n = 10*n + (c - UInt8('0'))
+function Base.parse{T<:Integer}(::Type{T}, s::AbstractArray{UInt8})
+    n = zero(T)
+    @fastmath for c in s
+        n::T = 10n + (c - T(0x30))
     end
     n
 end
 
-@time (idxs, nnzcols) = readvcf("ALL.chr1.phase3_shapeit2_mvncall_integrated_v5a.20130502.genotypes.vcf.gz")
-#@time (idxs, data, nnzcols) = readvcf("try.vcf")
+#Main driver
+#Read all .vcf.gz files in current directory and saves data as a sparse matrix
+#in coordinate (IJV) format to jld
+for filename in readdir()
+    endswith(filename, ".vcf.gz") || continue
+    destfilename = string(split(filename, ".")[2], ".jld")
 
-using JLD
-#@time JLD.save("chr1.jld", "idxs", idxs, "data", data, "nnzcols", nnzcols, compress=true)
-@time JLD.save("chr1.jld", "idxs", idxs, "nnzcols", nnzcols, compress=true)
+    isfile(destfilename) && continue
+
+    info("Reading $filename:")
+
+    @time (Is, Js, Vs) = readvcf(filename)
+
+    info("Saving sparse matrix to $destfilename:")
+    @time JLD.save(destfilename, "I", Is, "J", Js, "V", Vs, compress=true)
+end
 
