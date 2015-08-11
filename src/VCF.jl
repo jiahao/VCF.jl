@@ -240,7 +240,7 @@ end
 #If no files specified, Read all .vcf.gz and .vcf files in current directory
 #Saves data as a sparse matrix in coordinate (IJV) format to jld
 
-cd(joinpath("1000genomesdata", "raw"))
+cd(joinpath("..", "1000genomesdata", "raw"))
 filelist = length(ARGS) > 0 ? ARGS : filter(f->(endswith(f, ".vcf") ||
     endswith(f, ".vcf.gz")), readdir())
 
