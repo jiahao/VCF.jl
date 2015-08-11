@@ -81,7 +81,7 @@ function Base.read(filename)
 
     #Iterate through file
     while true
-        read(stream, UInt8)
+        c = read(stream, UInt8)
         n += 1
         if mode == :startline
             lineno += 1
@@ -239,12 +239,14 @@ end
 #Read in list of files from command line
 #If no files specified, Read all .vcf.gz and .vcf files in current directory
 #Saves data as a sparse matrix in coordinate (IJV) format to jld
+
+cd(joinpath("1000genomesdata", "raw"))
 filelist = length(ARGS) > 0 ? ARGS : filter(f->(endswith(f, ".vcf") ||
     endswith(f, ".vcf.gz")), readdir())
 
 for filename in filelist
-    destfilename = string(filename[1:end-(endswith(filename, "vcf.gz") ? 6 :
-        3)], "jld")
+    destfilename = joinpath("..", "parsed", string(filename[1:end-(endswith(filename, "vcf.gz") ? 6 :
+        3)], "jld"))
 
     #Don't process file if it already exists
     if isfile(destfilename)
