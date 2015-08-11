@@ -81,15 +81,7 @@ function Base.read(filename)
 
     #Iterate through file
     while true
-        c = try
-            read(stream, UInt8)
-        catch e
-            if isa(e, EOFError)
-                break
-            else
-                rethrow(e)
-            end
-        end
+        read(stream, UInt8)
         n += 1
         if mode == :startline
             lineno += 1
@@ -110,6 +102,7 @@ function Base.read(filename)
 
                 if fieldidx==2
                     mode = :readpos
+                    seek(tmpbuf, 0)
                 end
             end
 
@@ -165,8 +158,6 @@ function Base.read(filename)
                 mode = :skipfield
 
             else
-                println(mode)
-                println(takebuf_array(tmpbuf))
                 error("Unknown char $(Char(c)) (0x$(hex(c))) on line $lineno, file offset $n")
             end
 
@@ -206,6 +197,8 @@ function Base.read(filename)
 
             mode = c=='\n' ? :startline : :readdata
         end
+
+        eof(stream) && break
     end
 
     @label done
@@ -235,6 +228,9 @@ function Base.parse{T<:Integer}(::Type{T}, s::AbstractArray{UInt8})
     n = zero(T)
     @fastmath for c in s
         n::T = 10n + (c - T(0x30))
+        if n<0 || !('0'<=c<='9')
+            error(string(Char(c),':',s,':',n))
+        end
     end
     n
 end
@@ -247,7 +243,8 @@ filelist = length(ARGS) > 0 ? ARGS : filter(f->(endswith(f, ".vcf") ||
     endswith(f, ".vcf.gz")), readdir())
 
 for filename in filelist
-    destfilename = string(filename[1:end-(endswith("vcf.gz") ? 6 : 3)], "jld")
+    destfilename = string(filename[1:end-(endswith(filename, "vcf.gz") ? 6 :
+        3)], "jld")
 
     #Don't process file if it already exists
     if isfile(destfilename)
