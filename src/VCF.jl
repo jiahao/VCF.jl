@@ -1,5 +1,7 @@
 #!/usr/bin/env julia
 
+module VCF
+
 using GZip
 using JLD
 using ProgressMeter
@@ -237,30 +239,5 @@ function Base.parse{T<:Integer}(::Type{T}, s::AbstractArray{UInt8})
     n
 end
 
-#Main driver
-#Read in list of files from command line
-#If no files specified, Read all .vcf.gz and .vcf files in current directory
-#Saves data as a sparse matrix in coordinate (IJV) format to jld
-
-cd(joinpath("..", "1000genomesdata", "raw"))
-filelist = length(ARGS) > 0 ? ARGS : filter(f->(endswith(f, ".vcf") ||
-    endswith(f, ".vcf.gz")), readdir())
-
-for filename in filelist
-    destfilename = joinpath("..", "parsed", string(filename[1:end-(endswith(filename, "vcf.gz") ? 6 :
-        3)], "jld"))
-
-    #Don't process file if it already exists
-    if isfile(destfilename)
-        warn("Output file $destfilename already exists. Skipping.")
-        continue
-    end
-
-    info("Reading $filename:")
-
-    @time (Is, Js, Vs) = read(filename)
-
-    info("Saving sparse matrix to $destfilename:")
-    @time JLD.save(destfilename, "I", Is, "J", Js, "V", Vs, compress=true)
-end
+end #module VCF
 
